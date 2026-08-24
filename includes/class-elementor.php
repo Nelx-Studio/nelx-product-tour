@@ -21,6 +21,17 @@ final class NELXSTD_PRT_Elementor {
 	private static $instance = null;
 
 	/**
+	 * Tracks Elementor element objects whose Product Tour controls are registered.
+	 *
+	 * The generic injection hook runs for every native Elementor section. Keeping a
+	 * per-object guard lets us register our own Content and Style sections exactly
+	 * once without inspecting element settings while the controls stack is loading.
+	 *
+	 * @var \SplObjectStorage|null
+	 */
+	private $registered_editor_elements = null;
+
+	/**
 	 * Returns the singleton instance.
 	 *
 	 * @return NELXSTD_PRT_Elementor
@@ -42,9 +53,10 @@ final class NELXSTD_PRT_Elementor {
 		add_action( 'elementor/elements/categories_registered', array( $this, 'register_category' ) );
 		add_action( 'elementor/widgets/register', array( $this, 'register_widgets' ) );
 
-		// Generic hook keeps existing widget/section/column support intact.
-		add_action( 'elementor/element/after_section_end', array( $this, 'register_tour_controls' ), 10, 3 );
-
+		// Register the Product Tour sections once, before Elementor begins adding the
+		// native sections for each supported element. Each section declares its own
+		// Content or Style tab, so there is no dependency on Advanced-tab internals.
+		add_action( 'elementor/element/before_section_start', array( $this, 'register_tour_editor_sections' ), 10, 3 );
 
 		add_action( 'elementor/frontend/before_render', array( $this, 'add_tour_render_attributes' ) );
 	}
@@ -77,51 +89,70 @@ final class NELXSTD_PRT_Elementor {
 		}
 
 		require_once NELXSTD_PRT_PATH . 'includes/class-tour-launcher-widget.php';
+		require_once NELXSTD_PRT_PATH . 'includes/class-floating-replay-widget.php';
 
-		if ( ! class_exists( 'NELXSTD_PRT_Tour_Launcher_Widget' ) ) {
-			return;
+		if ( class_exists( 'NELXSTD_PRT_Tour_Launcher_Widget' ) ) {
+			$widgets_manager->register( new NELXSTD_PRT_Tour_Launcher_Widget() );
 		}
 
-		$widgets_manager->register( new NELXSTD_PRT_Tour_Launcher_Widget() );
-	}
-
-	/**
-	 * Dispatches product tour control registration for the current Elementor section.
-	 *
-	 * @param \Elementor\Element_Base $element Elementor element.
-	 * @param string                  $section_id Elementor section ID.
-	 * @param array                   $args Hook args.
-	 * @return void
-	 */
-	public function register_tour_controls( $element, $section_id, $args ) {
-		unset( $args );
-
-		if ( $this->should_register_advanced_controls( $element, $section_id ) ) {
-			$this->register_tour_advanced_controls( $element );
-		}
-
-		if ( $this->should_register_style_controls( $element, $section_id ) ) {
-			$this->register_tour_style_section( $element );
+		if ( class_exists( 'NELXSTD_PRT_Floating_Replay_Widget' ) ) {
+			$widgets_manager->register( new NELXSTD_PRT_Floating_Replay_Widget() );
 		}
 	}
 
 	/**
-	 * Registers the product tour setup controls in the Advanced tab.
+	 * Registers Product Tour controls once for each supported Elementor element.
+	 *
+	 * Elementor calls this hook before every native section. The object-level guard
+	 * is set before our sections are created, preventing recursive or duplicate
+	 * registration while preserving widget, section, column, container and Grid
+	 * container support.
+	 *
+	 * @param \Elementor\Controls_Stack $element Elementor element/control stack.
+	 * @param string                    $section_id Native Elementor section ID.
+	 * @param array                     $args Native section arguments.
+	 * @return void
+	 */
+	public function register_tour_editor_sections( $element, $section_id, $args ) {
+		unset( $section_id, $args );
+
+		if ( ! $this->is_supported_editor_element( $element ) ) {
+			return;
+		}
+
+		if ( null === $this->registered_editor_elements ) {
+			$this->registered_editor_elements = new \SplObjectStorage();
+		}
+
+		if ( $this->registered_editor_elements->contains( $element ) ) {
+			return;
+		}
+
+		// Attach the object before creating sections because Elementor may execute
+		// section-injection hooks while a custom section is being registered.
+		$this->registered_editor_elements->attach( $element );
+
+		$this->register_tour_content_controls( $element );
+		$this->register_tour_style_sections( $element );
+	}
+
+	/**
+	 * Registers product tour setup controls in the native primary tab.
+	 *
+	 * Widgets use Content. Layout elements use Layout so Elementor keeps its
+	 * standard Layout > Style > Advanced tab order.
 	 *
 	 * @param \Elementor\Element_Base $element Elementor element.
 	 * @return void
 	 */
-	private function register_tour_advanced_controls( $element ) {
-		$existing_controls = method_exists( $element, 'get_controls' ) ? $element->get_controls() : array();
-		if ( isset( $existing_controls['nelxstd_prt_enable_step'] ) ) {
-			return;
-		}
+	private function register_tour_content_controls( $element ) {
+		$setup_tab = $this->get_tour_setup_tab( $element );
 
 		$element->start_controls_section(
 			'nelxstd_prt_section',
 			array(
 				'label' => __( 'Nelx Product Tour', 'nelx-product-tour' ),
-				'tab'   => \Elementor\Controls_Manager::TAB_ADVANCED,
+				'tab'   => $setup_tab,
 			)
 		);
 
@@ -331,47 +362,42 @@ final class NELXSTD_PRT_Elementor {
 	}
 
 	/**
-	 * Registers product tour styling controls in Elementor's Style tab.
+	 * Registers Product Tour styling as independent Elementor Style sections.
+	 *
+	 * The section-level condition keeps the Style tab clean until the tour step is
+	 * enabled in the element's primary setup tab. Runtime-only controls store values for the tour
+	 * payload; they never style the host Elementor widget or container.
 	 *
 	 * @param \Elementor\Element_Base $element Elementor element.
 	 * @return void
 	 */
-	private function register_tour_style_section( $element ) {
-		$existing_controls = method_exists( $element, 'get_controls' ) ? $element->get_controls() : array();
-		if ( isset( $existing_controls['nelxstd_prt_card_background'] ) ) {
-			return;
-		}
-
-		$condition = array(
+	private function register_tour_style_sections( $element ) {
+		$section_condition = array(
 			'nelxstd_prt_enable_step' => 'yes',
 		);
 
-		// Do not call get_settings() while Elementor is building the control stack.
-		// Elementor may not have initialized the element data yet, which can result in
-		// Controls_Stack::sanitize_settings() receiving null and causing a fatal error.
-		// Saved values are loaded by Elementor automatically once these controls exist;
-		// legacy 1.0.0 values remain available as runtime fallbacks in build_tour_styles().
 		$card_width_default       = array( 'size' => 360, 'unit' => 'px' );
 		$card_padding_default     = array( 'top' => 22, 'right' => 22, 'bottom' => 22, 'left' => 22, 'unit' => 'px', 'isLinked' => true );
 		$card_radius_default      = array( 'top' => 20, 'right' => 20, 'bottom' => 20, 'left' => 20, 'unit' => 'px', 'isLinked' => true );
 		$highlight_radius_default = array( 'top' => 14, 'right' => 14, 'bottom' => 14, 'left' => 14, 'unit' => 'px', 'isLinked' => true );
 
+		/*
+		 * Tour Card.
+		 */
 		$element->start_controls_section(
-			'nelxstd_prt_style_section',
+			'nelxstd_prt_style_card_section',
 			array(
-				'label'     => __( 'Nelx Product Tour', 'nelx-product-tour' ),
+				'label'     => __( 'Tour Card', 'nelx-product-tour' ),
 				'tab'       => \Elementor\Controls_Manager::TAB_STYLE,
-				'condition' => $condition,
+				'condition' => $section_condition,
 			)
 		);
-
-		$this->register_legacy_style_controls( $element );
 
 		$element->add_control(
 			'nelxstd_prt_style_intro',
 			array(
 				'type'            => \Elementor\Controls_Manager::RAW_HTML,
-				'raw'             => __( 'These controls style the guided tour created by this element. Changes apply to the tour card, its contents, the highlighted target, and the floating replay button.', 'nelx-product-tour' ),
+				'raw'             => __( 'Style the guided tour created by this element. The Floating Tour Replay Button remains an independent Elementor widget with its own controls.', 'nelx-product-tour' ),
 				'content_classes' => 'elementor-panel-alert elementor-panel-alert-info',
 				'render_type'     => 'none',
 			)
@@ -386,71 +412,82 @@ final class NELXSTD_PRT_Elementor {
 				'label_off'    => __( 'Hide', 'nelx-product-tour' ),
 				'return_value' => 'yes',
 				'default'      => '',
-				'description'  => __( 'Editor-only preview. Turn this on to display a live tour card while styling this step. It never appears on the public frontend.', 'nelx-product-tour' ),
-				'condition'    => $condition,
+				'description'  => __( 'Editor-only preview. It never appears on the public frontend.', 'nelx-product-tour' ),
 				'render_type'  => 'none',
 			)
 		);
 
-		// Tour card.
-		$element->add_control(
-			'nelxstd_prt_style_heading_card',
+		$this->add_color_control( $element, 'nelxstd_prt_card_background', __( 'Background', 'nelx-product-tour' ), '#ffffff', array() );
+		$this->add_border_group( $element, 'nelxstd_prt_card_border', __( 'Border', 'nelx-product-tour' ), array() );
+		$this->add_box_shadow_group( $element, 'nelxstd_prt_card_shadow', __( 'Box Shadow', 'nelx-product-tour' ), array() );
+		$this->add_slider_control( $element, 'nelxstd_prt_card_width_control', __( 'Width', 'nelx-product-tour' ), 360, 260, 640, array(), $card_width_default );
+		$this->add_dimensions_control( $element, 'nelxstd_prt_card_padding_control', __( 'Padding', 'nelx-product-tour' ), $card_padding_default, array( 'px', 'em', 'rem' ), array() );
+		$this->add_dimensions_control( $element, 'nelxstd_prt_card_radius_control', __( 'Border Radius', 'nelx-product-tour' ), $card_radius_default, array( 'px', '%' ), array() );
+
+		// Hidden compatibility values remain inside a valid section.
+		$this->register_legacy_style_controls( $element );
+		$element->end_controls_section();
+
+		/*
+		 * Title & Description.
+		 */
+		$element->start_controls_section(
+			'nelxstd_prt_style_text_section',
 			array(
-				'label'      => __( 'Tour Card', 'nelx-product-tour' ),
-				'type'       => \Elementor\Controls_Manager::HEADING,
-				'separator'  => 'before',
-				'render_type' => 'none',
+				'label'     => __( 'Title & Description', 'nelx-product-tour' ),
+				'tab'       => \Elementor\Controls_Manager::TAB_STYLE,
+				'condition' => $section_condition,
 			)
 		);
 
-		$this->add_color_control( $element, 'nelxstd_prt_card_background', __( 'Background', 'nelx-product-tour' ), '#ffffff', $condition );
-		$this->add_border_group( $element, 'nelxstd_prt_card_border', __( 'Border', 'nelx-product-tour' ), $condition );
-		$this->add_box_shadow_group( $element, 'nelxstd_prt_card_shadow', __( 'Box Shadow', 'nelx-product-tour' ), $condition );
-		$this->add_slider_control( $element, 'nelxstd_prt_card_width_control', __( 'Width', 'nelx-product-tour' ), 360, 260, 640, $condition, $card_width_default );
-		$this->add_dimensions_control( $element, 'nelxstd_prt_card_padding_control', __( 'Padding', 'nelx-product-tour' ), $card_padding_default, array( 'px', 'em', 'rem' ), $condition );
-		$this->add_dimensions_control( $element, 'nelxstd_prt_card_radius_control', __( 'Border Radius', 'nelx-product-tour' ), $card_radius_default, array( 'px', '%' ), $condition );
+		$this->add_color_control( $element, 'nelxstd_prt_title_color', __( 'Title Color', 'nelx-product-tour' ), '#272626', array() );
+		$this->add_typography_group( $element, 'nelxstd_prt_title_typography', __( 'Title Typography', 'nelx-product-tour' ), array() );
+		$this->add_color_control( $element, 'nelxstd_prt_description_color', __( 'Description Color', 'nelx-product-tour' ), '#626262', array() );
+		$this->add_typography_group( $element, 'nelxstd_prt_description_typography', __( 'Description Typography', 'nelx-product-tour' ), array() );
+		$element->end_controls_section();
 
-		// Text.
-		$element->add_control(
-			'nelxstd_prt_style_heading_text',
+		/*
+		 * Step Indicator.
+		 */
+		$element->start_controls_section(
+			'nelxstd_prt_style_indicator_section',
 			array(
-				'label'      => __( 'Title & Description', 'nelx-product-tour' ),
-				'type'       => \Elementor\Controls_Manager::HEADING,
-				'separator'  => 'before',
-				'render_type' => 'none',
+				'label'     => __( 'Step Indicator', 'nelx-product-tour' ),
+				'tab'       => \Elementor\Controls_Manager::TAB_STYLE,
+				'condition' => $section_condition,
 			)
 		);
 
-		$this->add_color_control( $element, 'nelxstd_prt_title_color', __( 'Title Color', 'nelx-product-tour' ), '#272626', $condition );
-		$this->add_typography_group( $element, 'nelxstd_prt_title_typography', __( 'Title Typography', 'nelx-product-tour' ), $condition );
-		$this->add_color_control( $element, 'nelxstd_prt_description_color', __( 'Description Color', 'nelx-product-tour' ), '#626262', $condition );
-		$this->add_typography_group( $element, 'nelxstd_prt_description_typography', __( 'Description Typography', 'nelx-product-tour' ), $condition );
-
-		// Step indicator.
-		$element->add_control(
-			'nelxstd_prt_style_heading_indicator',
-			array(
-				'label'      => __( 'Step Indicator', 'nelx-product-tour' ),
-				'type'       => \Elementor\Controls_Manager::HEADING,
-				'separator'  => 'before',
-				'render_type' => 'none',
-			)
+		$this->add_color_control( $element, 'nelxstd_prt_indicator_background', __( 'Background', 'nelx-product-tour' ), '#e0f7fa', array() );
+		$this->add_color_control( $element, 'nelxstd_prt_indicator_color', __( 'Text Color', 'nelx-product-tour' ), '#1e3a8a', array() );
+		$this->add_typography_group( $element, 'nelxstd_prt_indicator_typography', __( 'Typography', 'nelx-product-tour' ), array() );
+		$this->add_dimensions_control(
+			$element,
+			'nelxstd_prt_indicator_padding_control',
+			__( 'Padding', 'nelx-product-tour' ),
+			array( 'top' => 5, 'right' => 10, 'bottom' => 5, 'left' => 10, 'unit' => 'px', 'isLinked' => true ),
+			array( 'px', 'em', 'rem' ),
+			array()
 		);
+		$this->add_dimensions_control(
+			$element,
+			'nelxstd_prt_indicator_radius_control',
+			__( 'Border Radius', 'nelx-product-tour' ),
+			array( 'top' => 999, 'right' => 999, 'bottom' => 999, 'left' => 999, 'unit' => 'px', 'isLinked' => true ),
+			array( 'px', '%' ),
+			array()
+		);
+		$element->end_controls_section();
 
-		$this->add_color_control( $element, 'nelxstd_prt_indicator_background', __( 'Background', 'nelx-product-tour' ), '#e0f7fa', $condition );
-		$this->add_color_control( $element, 'nelxstd_prt_indicator_color', __( 'Text Color', 'nelx-product-tour' ), '#1e3a8a', $condition );
-		$this->add_typography_group( $element, 'nelxstd_prt_indicator_typography', __( 'Typography', 'nelx-product-tour' ), $condition );
-		$this->add_dimensions_control( $element, 'nelxstd_prt_indicator_padding_control', __( 'Padding', 'nelx-product-tour' ), array( 'top' => 5, 'right' => 10, 'bottom' => 5, 'left' => 10, 'unit' => 'px', 'isLinked' => true ), array( 'px', 'em', 'rem' ), $condition );
-		$this->add_dimensions_control( $element, 'nelxstd_prt_indicator_radius_control', __( 'Border Radius', 'nelx-product-tour' ), array( 'top' => 999, 'right' => 999, 'bottom' => 999, 'left' => 999, 'unit' => 'px', 'isLinked' => true ), array( 'px', '%' ), $condition );
-
-		// Buttons.
-		$element->add_control(
-			'nelxstd_prt_style_heading_buttons',
+		/*
+		 * Tour Buttons Position.
+		 */
+		$element->start_controls_section(
+			'nelxstd_prt_style_navigation_section',
 			array(
-				'label'      => __( 'Tour Buttons', 'nelx-product-tour' ),
-				'type'       => \Elementor\Controls_Manager::HEADING,
-				'separator'  => 'before',
-				'render_type' => 'none',
+				'label'     => __( 'Tour Buttons Position', 'nelx-product-tour' ),
+				'tab'       => \Elementor\Controls_Manager::TAB_STYLE,
+				'condition' => $section_condition,
 			)
 		);
 
@@ -464,117 +501,69 @@ final class NELXSTD_PRT_Elementor {
 					'inside'  => __( 'Inside Card (Default)', 'nelx-product-tour' ),
 					'outside' => __( 'Outside Card', 'nelx-product-tour' ),
 				),
-				'description' => __( 'On mobile, navigation always stays inside the card. Outside Card places Back/Next below the card on desktop.', 'nelx-product-tour' ),
-				'condition'   => $condition,
+				'description' => __( "Inside Card keeps the navigation in Driver.js's native footer on all devices. Outside Card places only the navigation below the card; the progress indicator remains in the footer.", 'nelx-product-tour' ),
 				'render_type' => 'none',
 			)
 		);
+		$element->end_controls_section();
 
-		$this->add_button_style_controls( $element, 'skip', __( 'Skip Button', 'nelx-product-tour' ), '#fff0eb', '#f4511e', $condition );
-		$this->add_button_style_controls( $element, 'back', __( 'Back Button', 'nelx-product-tour' ), '#f4f7fb', '#272626', $condition );
-		$this->add_button_style_controls( $element, 'next', __( 'Next / Done Button', 'nelx-product-tour' ), '#1e3a8a', '#ffffff', $condition );
-
-		// Target highlight.
-		$element->add_control(
-			'nelxstd_prt_style_heading_highlight',
+		/*
+		 * Tour Skip Button.
+		 */
+		$element->start_controls_section(
+			'nelxstd_prt_style_skip_section',
 			array(
-				'label'      => __( 'Target Highlight', 'nelx-product-tour' ),
-				'type'       => \Elementor\Controls_Manager::HEADING,
-				'separator'  => 'before',
-				'render_type' => 'none',
+				'label'     => __( 'Tour Skip Button', 'nelx-product-tour' ),
+				'tab'       => \Elementor\Controls_Manager::TAB_STYLE,
+				'condition' => $section_condition,
 			)
 		);
+		$this->add_button_style_controls( $element, 'skip', '#fff0eb', '#f4511e', array() );
+		$element->end_controls_section();
 
-		$this->add_border_group( $element, 'nelxstd_prt_highlight_border', __( 'Highlight Border', 'nelx-product-tour' ), $condition );
-		$this->add_box_shadow_group( $element, 'nelxstd_prt_highlight_shadow', __( 'Highlight Shadow', 'nelx-product-tour' ), $condition );
-		$this->add_dimensions_control( $element, 'nelxstd_prt_highlight_radius_control', __( 'Border Radius', 'nelx-product-tour' ), $highlight_radius_default, array( 'px', '%' ), $condition );
-
-		// Floating replay button.
-		$element->add_control(
-			'nelxstd_prt_style_heading_floating',
+		/*
+		 * Tour Back Button.
+		 */
+		$element->start_controls_section(
+			'nelxstd_prt_style_back_section',
 			array(
-				'label'      => __( 'Floating Replay Button', 'nelx-product-tour' ),
-				'type'       => \Elementor\Controls_Manager::HEADING,
-				'separator'  => 'before',
-				'render_type' => 'none',
+				'label'     => __( 'Tour Back Button', 'nelx-product-tour' ),
+				'tab'       => \Elementor\Controls_Manager::TAB_STYLE,
+				'condition' => $section_condition,
+			)
+		);
+		$this->add_button_style_controls( $element, 'back', '#f4f7fb', '#272626', array() );
+		$element->end_controls_section();
+
+		/*
+		 * Tour Next/Done Button.
+		 */
+		$element->start_controls_section(
+			'nelxstd_prt_style_next_section',
+			array(
+				'label'     => __( 'Tour Next/Done Button', 'nelx-product-tour' ),
+				'tab'       => \Elementor\Controls_Manager::TAB_STYLE,
+				'condition' => $section_condition,
+			)
+		);
+		$this->add_button_style_controls( $element, 'next', '#1e3a8a', '#ffffff', array() );
+		$element->end_controls_section();
+
+		/*
+		 * Target Highlight.
+		 */
+		$element->start_controls_section(
+			'nelxstd_prt_style_highlight_section',
+			array(
+				'label'     => __( 'Target Highlight', 'nelx-product-tour' ),
+				'tab'       => \Elementor\Controls_Manager::TAB_STYLE,
+				'condition' => $section_condition,
 			)
 		);
 
-		$element->add_control(
-			'nelxstd_prt_floating_background_type',
-			array(
-				'label'       => __( 'Background Type', 'nelx-product-tour' ),
-				'type'        => \Elementor\Controls_Manager::SELECT,
-				'default'     => '',
-				'options'     => array(
-					''        => __( 'Original Gradient (Default)', 'nelx-product-tour' ),
-					'classic' => __( 'Classic', 'nelx-product-tour' ),
-					'gradient' => __( 'Gradient', 'nelx-product-tour' ),
-				),
-				'condition'   => $condition,
-				'render_type' => 'none',
-			)
-		);
-		$this->add_color_control( $element, 'nelxstd_prt_floating_background', __( 'Background Color (Classic)', 'nelx-product-tour' ), '', $condition );
-		$this->add_color_control( $element, 'nelxstd_prt_floating_gradient_color_a', __( 'Gradient Color 1', 'nelx-product-tour' ), '#1e3a8a', $condition );
-		$this->add_color_control( $element, 'nelxstd_prt_floating_gradient_color_b', __( 'Gradient Color 2', 'nelx-product-tour' ), '#00b7c2', $condition );
-		$this->add_slider_control( $element, 'nelxstd_prt_floating_gradient_angle_control', __( 'Gradient Angle', 'nelx-product-tour' ), 135, 0, 360, $condition, array( 'size' => 135, 'unit' => 'deg' ) );
-		$this->add_color_control( $element, 'nelxstd_prt_floating_color', __( 'Text Color', 'nelx-product-tour' ), '#ffffff', $condition );
-		$this->add_typography_group( $element, 'nelxstd_prt_floating_typography', __( 'Typography', 'nelx-product-tour' ), $condition );
-		$this->add_border_group( $element, 'nelxstd_prt_floating_border', __( 'Border', 'nelx-product-tour' ), $condition );
-		$this->add_box_shadow_group( $element, 'nelxstd_prt_floating_shadow', __( 'Box Shadow', 'nelx-product-tour' ), $condition );
-		$this->add_dimensions_control( $element, 'nelxstd_prt_floating_padding_control', __( 'Padding', 'nelx-product-tour' ), array( 'top' => 14, 'right' => 18, 'bottom' => 14, 'left' => 18, 'unit' => 'px', 'isLinked' => false ), array( 'px', 'em', 'rem' ), $condition );
-		$this->add_dimensions_control( $element, 'nelxstd_prt_floating_radius_control', __( 'Border Radius', 'nelx-product-tour' ), array( 'top' => 999, 'right' => 999, 'bottom' => 999, 'left' => 999, 'unit' => 'px', 'isLinked' => true ), array( 'px', '%' ), $condition );
-
-		$element->add_control(
-			'nelxstd_prt_floating_style_heading_hover',
-			array(
-				'label'       => __( 'Hover', 'nelx-product-tour' ),
-				'type'        => \Elementor\Controls_Manager::HEADING,
-				'separator'   => 'before',
-				'render_type' => 'none',
-			)
-		);
-		$element->add_control(
-			'nelxstd_prt_floating_hover_background_type',
-			array(
-				'label'       => __( 'Hover Background Type', 'nelx-product-tour' ),
-				'type'        => \Elementor\Controls_Manager::SELECT,
-				'default'     => '',
-				'options'     => array(
-					''        => __( 'Same as Normal', 'nelx-product-tour' ),
-					'classic' => __( 'Classic', 'nelx-product-tour' ),
-					'gradient' => __( 'Gradient', 'nelx-product-tour' ),
-				),
-				'condition'   => $condition,
-				'render_type' => 'none',
-			)
-		);
-		$this->add_color_control( $element, 'nelxstd_prt_floating_hover_background', __( 'Hover Background Color (Classic)', 'nelx-product-tour' ), '', $condition );
-		$this->add_color_control( $element, 'nelxstd_prt_floating_hover_gradient_color_a', __( 'Hover Gradient Color 1', 'nelx-product-tour' ), '#1e3a8a', $condition );
-		$this->add_color_control( $element, 'nelxstd_prt_floating_hover_gradient_color_b', __( 'Hover Gradient Color 2', 'nelx-product-tour' ), '#00b7c2', $condition );
-		$this->add_slider_control( $element, 'nelxstd_prt_floating_hover_gradient_angle_control', __( 'Hover Gradient Angle', 'nelx-product-tour' ), 135, 0, 360, $condition, array( 'size' => 135, 'unit' => 'deg' ) );
-		$this->add_color_control( $element, 'nelxstd_prt_floating_hover_color', __( 'Hover Text Color', 'nelx-product-tour' ), '#ffffff', $condition );
-		$this->add_border_group( $element, 'nelxstd_prt_floating_hover_border', __( 'Hover Border', 'nelx-product-tour' ), $condition );
-		$this->add_box_shadow_group( $element, 'nelxstd_prt_floating_hover_shadow', __( 'Hover Box Shadow', 'nelx-product-tour' ), $condition );
-		$this->add_slider_control( $element, 'nelxstd_prt_floating_hover_lift_control', __( 'Hover Lift', 'nelx-product-tour' ), -1, -10, 10, $condition, array( 'size' => -1, 'unit' => 'px' ) );
-
-		$element->add_control(
-			'nelxstd_prt_floating_close_style_heading',
-			array(
-				'label'       => __( 'Close Button', 'nelx-product-tour' ),
-				'type'        => \Elementor\Controls_Manager::HEADING,
-				'separator'   => 'before',
-				'render_type' => 'none',
-			)
-		);
-		$this->add_color_control( $element, 'nelxstd_prt_floating_close_background', __( 'Background', 'nelx-product-tour' ), '#ffffff', $condition );
-		$this->add_color_control( $element, 'nelxstd_prt_floating_close_color', __( 'Color', 'nelx-product-tour' ), '#1e3a8a', $condition );
-		$this->add_border_group( $element, 'nelxstd_prt_floating_close_border', __( 'Border', 'nelx-product-tour' ), $condition );
-		$this->add_box_shadow_group( $element, 'nelxstd_prt_floating_close_shadow', __( 'Box Shadow', 'nelx-product-tour' ), $condition );
-		$this->add_slider_control( $element, 'nelxstd_prt_floating_close_size_control', __( 'Close Button Size', 'nelx-product-tour' ), 22, 14, 44, $condition );
-		$this->add_slider_control( $element, 'nelxstd_prt_floating_close_hover_lift_control', __( 'Close Hover Lift', 'nelx-product-tour' ), 0, -6, 6, $condition, array( 'size' => 0, 'unit' => 'px' ) );
-
+		$this->add_border_group( $element, 'nelxstd_prt_highlight_border', __( 'Highlight Border', 'nelx-product-tour' ), array() );
+		$this->add_box_shadow_group( $element, 'nelxstd_prt_highlight_shadow', __( 'Highlight Shadow', 'nelx-product-tour' ), array() );
+		$this->add_dimensions_control( $element, 'nelxstd_prt_highlight_radius_control', __( 'Border Radius', 'nelx-product-tour' ), $highlight_radius_default, array( 'px', '%' ), array() );
 		$element->end_controls_section();
 	}
 
@@ -645,22 +634,20 @@ final class NELXSTD_PRT_Elementor {
 	 * @return void
 	 */
 	private function add_color_control( $element, $id, $label, $default, $condition ) {
-		$element->add_control(
-			$id,
-			array(
-				'label'       => $label,
-				'type'        => \Elementor\Controls_Manager::COLOR,
-				'default'     => $default,
-				'condition'   => $condition,
-				// Keep the generated Elementor CSS away from the parent element.
-				// The value is consumed by the Product Tour runtime and applied to the
-				// Driver.js overlay/card instead.
-				'selectors'    => array(
-					'.nelxstd-prt-style-runtime-proxy' => '--nelxstd-prt-control-' . sanitize_key( $id ) . ': {{VALUE}};',
-				),
-				'render_type' => 'none',
-			)
+		$control = array(
+			'label'       => $label,
+			'type'        => \Elementor\Controls_Manager::COLOR,
+			'default'     => $default,
+			'render_type' => 'none',
 		);
+
+		if ( ! empty( $condition ) ) {
+			$control['condition'] = $condition;
+		}
+
+		// No Elementor selector is declared. The frontend tour runtime reads the
+		// stored value and applies it to the Driver.js UI, never to the host element.
+		$element->add_control( $id, $control );
 	}
 
 	/**
@@ -674,24 +661,29 @@ final class NELXSTD_PRT_Elementor {
 	 * @return void
 	 */
 	private function add_typography_group( $element, $name, $label, $condition ) {
+		$control = array(
+			'name'           => $name,
+			'label'          => $label,
+			// Group controls require a selector to expose their native fields. Scope
+			// that selector to a deliberately absent child so generated CSS cannot
+			// style the Elementor widget/container itself.
+			'selector'       => '{{WRAPPER}} .nelxstd-prt-runtime-style-proxy',
+			'render_type'    => 'none',
+			'fields_options' => array(
+				'font_size'      => array( 'responsive' => false ),
+				'line_height'    => array( 'responsive' => false ),
+				'letter_spacing' => array( 'responsive' => false ),
+				'word_spacing'   => array( 'responsive' => false ),
+			),
+		);
+
+		if ( ! empty( $condition ) ) {
+			$control['condition'] = $condition;
+		}
+
 		$element->add_group_control(
 			\Elementor\Group_Control_Typography::get_type(),
-			array(
-				'name'          => $name,
-				'label'         => $label,
-				'condition'     => $condition,
-				// These controls only store values for the Product Tour runtime.
-				// They must never generate Elementor CSS for the parent widget/container.
-				// The tour overlay is rendered by Driver.js outside the Elementor element tree.
-				'selector'      => '.nelxstd-prt-style-runtime-proxy',
-				'render_type'   => 'none',
-				'fields_options' => array(
-					'font_size'      => array( 'responsive' => false ),
-					'line_height'    => array( 'responsive' => false ),
-					'letter_spacing' => array( 'responsive' => false ),
-					'word_spacing'   => array( 'responsive' => false ),
-				),
-			)
+			$control
 		);
 	}
 
@@ -705,17 +697,20 @@ final class NELXSTD_PRT_Elementor {
 	 * @return void
 	 */
 	private function add_border_group( $element, $name, $label, $condition ) {
+		$control = array(
+			'name'        => $name,
+			'label'       => $label,
+			'selector'    => '{{WRAPPER}} .nelxstd-prt-runtime-style-proxy',
+			'render_type' => 'none',
+		);
+
+		if ( ! empty( $condition ) ) {
+			$control['condition'] = $condition;
+		}
+
 		$element->add_group_control(
 			\Elementor\Group_Control_Border::get_type(),
-			array(
-				'name'        => $name,
-				'label'       => $label,
-				'condition'   => $condition,
-				// Prevent Elementor from applying border styles to the parent widget.
-				// Values are consumed by the Product Tour runtime instead.
-				'selector'    => '.nelxstd-prt-style-runtime-proxy',
-				'render_type' => 'none',
-			)
+			$control
 		);
 	}
 
@@ -729,17 +724,20 @@ final class NELXSTD_PRT_Elementor {
 	 * @return void
 	 */
 	private function add_box_shadow_group( $element, $name, $label, $condition ) {
+		$control = array(
+			'name'        => $name,
+			'label'       => $label,
+			'selector'    => '{{WRAPPER}} .nelxstd-prt-runtime-style-proxy',
+			'render_type' => 'none',
+		);
+
+		if ( ! empty( $condition ) ) {
+			$control['condition'] = $condition;
+		}
+
 		$element->add_group_control(
 			\Elementor\Group_Control_Box_Shadow::get_type(),
-			array(
-				'name'        => $name,
-				'label'       => $label,
-				'condition'   => $condition,
-				// Prevent Elementor from applying box-shadow styles to the parent widget.
-				// Values are consumed by the Product Tour runtime instead.
-				'selector'    => '.nelxstd-prt-style-runtime-proxy',
-				'render_type' => 'none',
-			)
+			$control
 		);
 	}
 
@@ -755,18 +753,20 @@ final class NELXSTD_PRT_Elementor {
 	 * @return void
 	 */
 	private function add_dimensions_control( $element, $id, $label, $default, $units, $condition ) {
-		$element->add_responsive_control(
-			$id,
-			array(
-				'label'      => $label,
-				'type'       => \Elementor\Controls_Manager::DIMENSIONS,
-				'size_units' => $units,
-				'default'    => $default,
-				'condition'  => $condition,
-				'render_type' => 'none',
-				'responsive' => false,
-			)
+		$control = array(
+			'label'       => $label,
+			'type'        => \Elementor\Controls_Manager::DIMENSIONS,
+			'size_units'  => $units,
+			'default'     => $default,
+			'render_type' => 'none',
+			'responsive'  => false,
 		);
+
+		if ( ! empty( $condition ) ) {
+			$control['condition'] = $condition;
+		}
+
+		$element->add_responsive_control( $id, $control );
 	}
 
 	/**
@@ -782,63 +782,68 @@ final class NELXSTD_PRT_Elementor {
 	 * @return void
 	 */
 	private function add_slider_control( $element, $id, $label, $default, $min, $max, $condition, $control_default = null ) {
-		$element->add_control(
-			$id,
-			array(
-				'label'       => $label,
-				'type'        => \Elementor\Controls_Manager::SLIDER,
-				'size_units'  => array( 'px', '%', 'em', 'rem', 'deg' ),
-				'range'       => array(
-					'px' => array(
-						'min'  => $min,
-						'max'  => $max,
-						'step' => 1,
-					),
-					'deg' => array(
-						'min'  => $min,
-						'max'  => $max,
-						'step' => 1,
-					),
+		$control = array(
+			'label'      => $label,
+			'type'       => \Elementor\Controls_Manager::SLIDER,
+			'size_units' => array( 'px', '%', 'em', 'rem', 'deg' ),
+			'range'      => array(
+				'px' => array(
+					'min'  => $min,
+					'max'  => $max,
+					'step' => 1,
 				),
-				'default'     => null !== $control_default ? $control_default : array(
-					'size' => $default,
-					'unit' => 'px',
+				'deg' => array(
+					'min'  => $min,
+					'max'  => $max,
+					'step' => 1,
 				),
-				'condition'   => $condition,
-				'render_type' => 'none',
-			)
+			),
+			'default'     => null !== $control_default ? $control_default : array(
+				'size' => $default,
+				'unit' => 'px',
+			),
+			'render_type' => 'none',
 		);
+
+		if ( ! empty( $condition ) ) {
+			$control['condition'] = $condition;
+		}
+
+		$element->add_control( $id, $control );
 	}
 
 	/**
-	 * Adds complete style controls for a tour navigation button.
+	 * Adds complete runtime style controls for a tour navigation button.
 	 *
 	 * @param \Elementor\Element_Base $element Elementor element.
 	 * @param string                  $prefix Style prefix.
-	 * @param string                  $label Button label.
 	 * @param string                  $background Default background.
 	 * @param string                  $color Default text color.
-	 * @param array                   $condition Elementor condition.
+	 * @param array                   $condition Optional Elementor condition.
 	 * @return void
 	 */
-	private function add_button_style_controls( $element, $prefix, $label, $background, $color, $condition ) {
-		$element->add_control(
-			'nelxstd_prt_' . $prefix . '_style_heading',
-			array(
-				'label'      => $label,
-				'type'       => \Elementor\Controls_Manager::HEADING,
-				'separator'  => 'before',
-				'render_type' => 'none',
-			)
-		);
-
+	private function add_button_style_controls( $element, $prefix, $background, $color, $condition ) {
 		$this->add_color_control( $element, 'nelxstd_prt_' . $prefix . '_background', __( 'Background', 'nelx-product-tour' ), $background, $condition );
 		$this->add_color_control( $element, 'nelxstd_prt_' . $prefix . '_color', __( 'Text Color', 'nelx-product-tour' ), $color, $condition );
 		$this->add_typography_group( $element, 'nelxstd_prt_' . $prefix . '_typography', __( 'Typography', 'nelx-product-tour' ), $condition );
 		$this->add_border_group( $element, 'nelxstd_prt_' . $prefix . '_border', __( 'Border', 'nelx-product-tour' ), $condition );
 		$this->add_box_shadow_group( $element, 'nelxstd_prt_' . $prefix . '_shadow', __( 'Box Shadow', 'nelx-product-tour' ), $condition );
-		$this->add_dimensions_control( $element, 'nelxstd_prt_' . $prefix . '_padding_control', __( 'Padding', 'nelx-product-tour' ), array( 'top' => 11, 'right' => 16, 'bottom' => 11, 'left' => 16, 'unit' => 'px', 'isLinked' => false ), array( 'px', 'em', 'rem' ), $condition );
-		$this->add_dimensions_control( $element, 'nelxstd_prt_' . $prefix . '_radius_control', __( 'Border Radius', 'nelx-product-tour' ), array( 'top' => 999, 'right' => 999, 'bottom' => 999, 'left' => 999, 'unit' => 'px', 'isLinked' => true ), array( 'px', '%' ), $condition );
+		$this->add_dimensions_control(
+			$element,
+			'nelxstd_prt_' . $prefix . '_padding_control',
+			__( 'Padding', 'nelx-product-tour' ),
+			array( 'top' => 11, 'right' => 16, 'bottom' => 11, 'left' => 16, 'unit' => 'px', 'isLinked' => false ),
+			array( 'px', 'em', 'rem' ),
+			$condition
+		);
+		$this->add_dimensions_control(
+			$element,
+			'nelxstd_prt_' . $prefix . '_radius_control',
+			__( 'Border Radius', 'nelx-product-tour' ),
+			array( 'top' => 999, 'right' => 999, 'bottom' => 999, 'left' => 999, 'unit' => 'px', 'isLinked' => true ),
+			array( 'px', '%' ),
+			$condition
+		);
 
 		$element->add_control(
 			'nelxstd_prt_' . $prefix . '_hover_style_heading',
@@ -853,7 +858,16 @@ final class NELXSTD_PRT_Elementor {
 		$this->add_color_control( $element, 'nelxstd_prt_' . $prefix . '_hover_color', __( 'Hover Text Color', 'nelx-product-tour' ), $color, $condition );
 		$this->add_border_group( $element, 'nelxstd_prt_' . $prefix . '_hover_border', __( 'Hover Border', 'nelx-product-tour' ), $condition );
 		$this->add_box_shadow_group( $element, 'nelxstd_prt_' . $prefix . '_hover_shadow', __( 'Hover Box Shadow', 'nelx-product-tour' ), $condition );
-		$this->add_slider_control( $element, 'nelxstd_prt_' . $prefix . '_hover_lift_control', __( 'Hover Lift', 'nelx-product-tour' ), -1, -10, 10, $condition, array( 'size' => -1, 'unit' => 'px' ) );
+		$this->add_slider_control(
+			$element,
+			'nelxstd_prt_' . $prefix . '_hover_lift_control',
+			__( 'Hover Lift', 'nelx-product-tour' ),
+			-1,
+			-10,
+			10,
+			$condition,
+			array( 'size' => -1, 'unit' => 'px' )
+		);
 	}
 
 	/**
@@ -1295,41 +1309,50 @@ final class NELXSTD_PRT_Elementor {
 	}
 
 	/**
-	 * Determines whether the Advanced tab controls should be injected for this section.
+	 * Returns the native primary tab for the current Elementor element.
+	 *
+	 * Elementor layout elements do not use the Content tab. Registering a new
+	 * Content tab on them changes the normal tab order. Using TAB_LAYOUT keeps
+	 * Containers, Grid Containers, Sections and Columns on Layout > Style >
+	 * Advanced while regular widgets remain Content > Style > Advanced.
 	 *
 	 * @param \Elementor\Element_Base $element Elementor element.
-	 * @param string                  $section_id Section ID.
-	 * @return bool
+	 * @return string
 	 */
-	private function should_register_advanced_controls( $element, $section_id ) {
-		// Keep the original Elementor integration points so existing widget-level
-		// elements (Button, Icon, Image, etc.) continue to receive the tour controls.
-		// The generic after_section_end hook is used for widgets, sections, columns,
-		// and containers; containers additionally expose their layout section here.
-		if ( in_array( $section_id, array( '_section_style', 'section_advanced' ), true ) ) {
-			return true;
+	private function get_tour_setup_tab( $element ) {
+		$type = $this->get_element_type( $element );
+		$is_layout_element = in_array( $type, array( 'container', 'section', 'column' ), true );
+
+		if ( $is_layout_element && defined( 'Elementor\\Controls_Manager::TAB_LAYOUT' ) ) {
+			return constant( 'Elementor\\Controls_Manager::TAB_LAYOUT' );
 		}
 
-		if ( 'container' === $this->get_element_type( $element ) && in_array( $section_id, array( 'section_layout', '_section_layout' ), true ) ) {
-			return true;
-		}
-
-		return false;
+		return \Elementor\Controls_Manager::TAB_CONTENT;
 	}
 
 	/**
-	 * Determines whether Style tab controls should be injected for this section.
+	 * Determines whether Product Tour controls belong on this Elementor element.
 	 *
-	 * @param \Elementor\Element_Base $element Elementor element.
-	 * @param string                  $section_id Section ID.
+	 * Grid is implemented as a Container layout mode, so the container type covers
+	 * both Flexbox and Grid containers. Document/page settings are intentionally
+	 * excluded to avoid adding element controls outside the normal element panel.
+	 *
+	 * @param \Elementor\Controls_Stack $element Elementor element/control stack.
 	 * @return bool
 	 */
-	private function should_register_style_controls( $element, $section_id ) {
-		// Register the Style tab section immediately after the Advanced controls are
-		// registered. This guarantees the Enable Tour Step control already exists when
-		// Elementor evaluates the Style tab conditions. Elementor still places the
-		// section under the Style tab regardless of registration order.
-		return $this->should_register_advanced_controls( $element, $section_id );
+	private function is_supported_editor_element( $element ) {
+		$type = $this->get_element_type( $element );
+
+		return in_array(
+			$type,
+			array(
+				'widget',
+				'section',
+				'column',
+				'container',
+			),
+			true
+		);
 	}
 
 	/**

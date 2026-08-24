@@ -4,10 +4,8 @@
 	var config = window.NELXSTD_PRT_CONFIG || {};
 	var tourGroups = [];
 	var activeTour = null;
-	var launcherDismissedForSession = false;
 	var editorPreview = null;
 	var editorPreviewRaf = null;
-	var navigationPositionRaf = null;
 
 	var STYLE_VARS = [
 		'--nelxstd-prt-card-background',
@@ -200,9 +198,35 @@
 		return 'nelxstd_prt_completed_' + String(config.userId || 0) + '_' + getCompletionKey(tourId);
 	}
 
-	function getLauncherDismissedKey() {
+	function getFloatingDismissedKey(tourId) {
 		var path = window.location && window.location.pathname ? window.location.pathname : '';
-		return 'nelxstd_prt_launcher_dismissed_' + String(config.userId || 0) + '_' + String(config.pageId || 0) + '_' + path;
+		return 'nelxstd_prt_floating_replay_dismissed_' + String(config.userId || 0) + '_' + String(config.pageId || 0) + '_' + normalizeTourId(tourId) + '_' + path;
+	}
+
+	function isFloatingDismissed(tourId) {
+		if (config.isEditor) {
+			return false;
+		}
+
+		try {
+			return window.localStorage.getItem(getFloatingDismissedKey(tourId)) === '1';
+		} catch (error) {
+			return false;
+		}
+	}
+
+	function dismissFloatingReplay(shell, tourId) {
+		if (!shell) {
+			return;
+		}
+
+		if (!config.isEditor) {
+			try {
+				window.localStorage.setItem(getFloatingDismissedKey(tourId), '1');
+			} catch (error) {}
+		}
+
+		shell.remove();
 	}
 
 	function isCompleted(tourId) {
@@ -262,9 +286,12 @@
 	function collectTours() {
 		var sources = Array.prototype.slice.call(document.querySelectorAll('[data-nelxstd-prt-step="1"]'));
 		var groups = {};
+		var seenSources = {};
 
 		sources.forEach(function (source) {
 			var tourId = normalizeTourId(source.getAttribute('data-nelxstd-prt-tour-id'));
+			var elementId = source.getAttribute('data-nelxstd-prt-element-id') || '';
+			var sourceKey = tourId + '::' + elementId;
 			var mode = source.getAttribute('data-nelxstd-prt-target-mode') || 'element';
 			var selector = source.getAttribute('data-nelxstd-prt-target-selector') || '';
 			var target = 'selector' === mode ? safeQuerySelector(selector) : source;
@@ -273,6 +300,15 @@
 			if (!target) {
 				return;
 			}
+
+			// JetEngine listings, dynamic tables, and other repeated template loops
+			// render the same Elementor widget markup multiple times. When that
+			// happens, only the first occurrence should create a tour step.
+			if (seenSources[sourceKey]) {
+				return;
+			}
+
+			seenSources[sourceKey] = true;
 
 			if (!groups[tourId]) {
 				groups[tourId] = {
@@ -544,191 +580,6 @@
 		return 1 === popover.nodeType ? popover : null;
 	}
 
-	function getPopoverNavigation(popover, wrapper) {
-		if (popover && popover.footerButtons && 1 === popover.footerButtons.nodeType) {
-			return popover.footerButtons;
-		}
-
-		return wrapper ? wrapper.querySelector('.driver-popover-navigation-btns') : null;
-	}
-
-	function getPopoverFooter(popover, wrapper) {
-		if (popover && popover.footer && 1 === popover.footer.nodeType) {
-			return popover.footer;
-		}
-
-		return wrapper ? wrapper.querySelector('.driver-popover-footer') : null;
-	}
-
-	function getNavigationParts(popover) {
-		var wrapper = getPopoverElement(popover);
-
-		return {
-			wrapper: wrapper,
-			footer: getPopoverFooter(popover, wrapper),
-			navigation: getPopoverNavigation(popover, wrapper),
-		};
-	}
-
-	function keepNavigationInFooter(parts) {
-		if (!parts || !parts.footer || !parts.navigation) {
-			return;
-		}
-
-		// Driver.js creates the navigation inside the footer. Re-assert that structure
-		// before applying either layout so desktop Inside Card uses the exact same DOM
-		// arrangement as mobile.
-		if (parts.navigation.parentNode !== parts.footer) {
-			parts.footer.appendChild(parts.navigation);
-		}
-	}
-
-	function setNavigationProperty(navigation, property, value) {
-		if (navigation) {
-			navigation.style.setProperty(property, value, 'important');
-		}
-	}
-
-	function positionNavigationInside(popover) {
-		var parts = getNavigationParts(popover);
-
-		if (!parts.wrapper || !parts.navigation) {
-			return;
-		}
-
-		keepNavigationInFooter(parts);
-
-		// Match the working mobile implementation explicitly instead of relying only
-		// on a CSS class. Inline !important values prevent theme or cached Elementor
-		// CSS from pushing the real frontend buttons outside the card.
-		setNavigationProperty(parts.navigation, 'position', 'static');
-		setNavigationProperty(parts.navigation, 'top', 'auto');
-		setNavigationProperty(parts.navigation, 'right', 'auto');
-		setNavigationProperty(parts.navigation, 'bottom', 'auto');
-		setNavigationProperty(parts.navigation, 'left', 'auto');
-		setNavigationProperty(parts.navigation, 'max-width', '100%');
-		setNavigationProperty(parts.navigation, 'width', 'auto');
-		setNavigationProperty(parts.navigation, 'flex-wrap', 'nowrap');
-		setNavigationProperty(parts.navigation, 'z-index', 'auto');
-	}
-
-	function prepareOutsideNavigation(popover) {
-		var parts = getNavigationParts(popover);
-		var viewportPadding = 12;
-
-		if (!parts.wrapper || !parts.navigation) {
-			return null;
-		}
-
-		keepNavigationInFooter(parts);
-
-		if (window.innerWidth <= 600) {
-			positionNavigationInside(popover);
-			return null;
-		}
-
-		// Remove the group from the footer flow before Driver.js measures and places
-		// the card. Its final viewport coordinates are applied on the next frame.
-		setNavigationProperty(parts.navigation, 'position', 'fixed');
-		setNavigationProperty(parts.navigation, 'top', '0px');
-		setNavigationProperty(parts.navigation, 'right', 'auto');
-		setNavigationProperty(parts.navigation, 'bottom', 'auto');
-		setNavigationProperty(parts.navigation, 'left', '0px');
-		setNavigationProperty(parts.navigation, 'max-width', 'calc(100vw - ' + (viewportPadding * 2) + 'px)');
-		setNavigationProperty(parts.navigation, 'width', 'max-content');
-		setNavigationProperty(parts.navigation, 'flex-wrap', 'wrap');
-		setNavigationProperty(parts.navigation, 'z-index', '1000000001');
-
-		return parts;
-	}
-
-	function positionOutsideNavigation(popover) {
-		var parts = getNavigationParts(popover);
-		var popoverRect;
-		var navigationRect;
-		var viewportPadding = 12;
-		var gap = 8;
-		var viewportWidth;
-		var navigationWidth;
-		var desiredLeft;
-		var maximumLeft;
-		var clampedLeft;
-
-		if (!parts.wrapper || !parts.navigation || !parts.wrapper.classList.contains('nelxstd-prt-nav-outside')) {
-			return;
-		}
-
-		if (window.innerWidth <= 600) {
-			positionNavigationInside(popover);
-			return;
-		}
-
-		prepareOutsideNavigation(popover);
-
-		popoverRect = parts.wrapper.getBoundingClientRect();
-		navigationRect = parts.navigation.getBoundingClientRect();
-		viewportWidth = document.documentElement.clientWidth || window.innerWidth;
-		navigationWidth = Math.min(navigationRect.width, Math.max(0, viewportWidth - (viewportPadding * 2)));
-
-		// Always place the group below the card. Right-align it with the card when
-		// there is room, then clamp the whole group inside the viewport at either edge.
-		desiredLeft = popoverRect.right - navigationWidth;
-		maximumLeft = Math.max(viewportPadding, viewportWidth - viewportPadding - navigationWidth);
-		clampedLeft = Math.min(maximumLeft, Math.max(viewportPadding, desiredLeft));
-
-		setNavigationProperty(parts.navigation, 'top', Math.round(popoverRect.bottom + gap) + 'px');
-		setNavigationProperty(parts.navigation, 'left', Math.round(clampedLeft) + 'px');
-		setNavigationProperty(parts.navigation, 'right', 'auto');
-		setNavigationProperty(parts.navigation, 'bottom', 'auto');
-	}
-
-	function scheduleNavigationPosition(popover, position) {
-		if (navigationPositionRaf) {
-			window.cancelAnimationFrame(navigationPositionRaf);
-		}
-
-		// Driver.js performs its own card placement immediately after onPopoverRender.
-		// Two frames ensure our final outside coordinates use the settled card rectangle.
-		navigationPositionRaf = window.requestAnimationFrame(function () {
-			navigationPositionRaf = window.requestAnimationFrame(function () {
-				navigationPositionRaf = null;
-
-				if ('outside' === position && window.innerWidth > 600) {
-					positionOutsideNavigation(popover);
-				} else {
-					positionNavigationInside(popover);
-				}
-			});
-		});
-	}
-
-	function applyNavigationPosition(popover, position) {
-		var parts = getNavigationParts(popover);
-		var isOutside = 'outside' === position;
-
-		if (!parts.wrapper || !parts.navigation) {
-			return;
-		}
-
-		parts.wrapper.classList.toggle('nelxstd-prt-nav-outside', isOutside);
-		parts.wrapper.classList.toggle('nelxstd-prt-nav-inside', !isOutside);
-
-		if (isOutside && window.innerWidth > 600) {
-			prepareOutsideNavigation(popover);
-		} else {
-			positionNavigationInside(popover);
-		}
-
-		scheduleNavigationPosition(popover, isOutside ? 'outside' : 'inside');
-	}
-
-	function repositionActiveOutsideNavigation() {
-		var popover = document.querySelector('.nelxstd-prt-driver-popover.nelxstd-prt-nav-outside');
-
-		if (popover) {
-			scheduleNavigationPosition(popover, 'outside');
-		}
-	}
 
 	function editorSetting(settings, key, fallback) {
 		return settings && Object.prototype.hasOwnProperty.call(settings, key) && '' !== settings[key] && null !== settings[key] && typeof settings[key] !== 'undefined' ? settings[key] : fallback;
@@ -1089,7 +940,7 @@
 		preview.querySelector('.driver-popover-description').textContent = description || '';
 		preview.querySelector('.driver-popover-progress-text').textContent = text('stepProgress').replace('%1$s', progress.current).replace('%2$s', progress.total);
 		applyTourStyles(styles);
-		applyNavigationPosition(preview, styles.navigation_position);
+		preview.classList.toggle('nelxstd-prt-nav-outside', 'outside' === styles.navigation_position);
 	}
 
 	function syncEditorPreview(view) {
@@ -1150,83 +1001,6 @@
 		}
 	}
 
-	function isLauncherDismissed() {
-		if (launcherDismissedForSession) {
-			return true;
-		}
-
-		if (config.isEditor) {
-			return false;
-		}
-
-		try {
-			return window.localStorage.getItem(getLauncherDismissedKey()) === '1';
-		} catch (error) {
-			return false;
-		}
-	}
-
-	function dismissLauncher() {
-		var shell = document.querySelector('.nelxstd-prt-launcher-shell');
-
-		launcherDismissedForSession = true;
-
-		if (!config.isEditor) {
-			try {
-				window.localStorage.setItem(getLauncherDismissedKey(), '1');
-			} catch (error) {}
-		}
-
-		if (shell) {
-			shell.remove();
-		}
-	}
-
-	function createLauncher() {
-		var shell;
-		var button;
-		var closeButton;
-
-		if (!tourGroups.length || document.querySelector('.nelxstd-prt-launcher-shell') || isLauncherDismissed()) {
-			return;
-		}
-
-		shell = document.createElement('div');
-		shell.className = 'nelxstd-prt-launcher-shell';
-
-		button = document.createElement('button');
-		button.type = 'button';
-		button.className = 'nelxstd-prt-launcher';
-		button.setAttribute('aria-label', config.isEditor ? text('previewTour') : text('replayTour'));
-		button.textContent = config.isEditor ? text('previewTour') : allToursCompleted() ? text('replayTour') : text('takeTour');
-		button.addEventListener('click', function () {
-			startTour(getFirstTour() || tourGroups[0]);
-		});
-
-		closeButton = document.createElement('button');
-		closeButton.type = 'button';
-		closeButton.className = 'nelxstd-prt-launcher-close';
-		closeButton.setAttribute('aria-label', text('close'));
-		closeButton.title = text('close');
-		closeButton.textContent = '×';
-		closeButton.addEventListener('click', function (event) {
-			event.preventDefault();
-			event.stopPropagation();
-			dismissLauncher();
-		});
-
-		shell.appendChild(button);
-		shell.appendChild(closeButton);
-		document.body.appendChild(shell);
-
-		applyGroupStyles(tourGroups[0]);
-	}
-
-	function allToursCompleted() {
-		return tourGroups.every(function (group) {
-			return isCompleted(group.id);
-		});
-	}
 
 	function getFirstTour() {
 		if (config.isEditor) {
@@ -1272,12 +1046,14 @@
 			stagePadding: 8,
 			stageRadius: 14,
 			steps: group.steps.map(function (step) {
+				var navigationPosition = (step.styles || {}).navigation_position || 'inside';
 				var popover = {
 					title: step.title,
 					description: step.description,
+					// Inside uses Driver.js's native footer/navigation flow. Only Outside gets a custom CSS mode.
+					popoverClass: 'nelxstd-prt-driver-popover' + ('outside' === navigationPosition ? ' nelxstd-prt-nav-outside' : ''),
 					onPopoverRender: function (renderedPopover) {
 						applyTourStyles(step.styles || {});
-						applyNavigationPosition(renderedPopover, (step.styles || {}).navigation_position);
 						decoratePopover(renderedPopover);
 					},
 				};
@@ -1297,7 +1073,6 @@
 				if (!config.isEditor) {
 					markComplete(group.id);
 				}
-				updateLauncher();
 			},
 		});
 
@@ -1315,16 +1090,6 @@
 		return text('stepProgress').replace('%1$s', '{{current}}').replace('%2$s', '{{total}}');
 	}
 
-	function updateLauncher() {
-		var button = document.querySelector('.nelxstd-prt-launcher');
-		var label;
-
-		if (button) {
-			label = config.isEditor ? text('previewTour') : allToursCompleted() ? text('replayTour') : text('takeTour');
-			button.textContent = label;
-			button.setAttribute('aria-label', label);
-		}
-	}
 
 	function bindLaunchers() {
 		document.querySelectorAll('[data-nelxstd-prt-launch-tour]').forEach(function (launcher) {
@@ -1345,12 +1110,51 @@
 		});
 	}
 
+	function bindFloatingReplayButtons() {
+		document.querySelectorAll('[data-nelxstd-prt-floating-tour]').forEach(function (shell) {
+			var tourId;
+			var button;
+			var closeButton;
+
+			if (shell.getAttribute('data-nelxstd-prt-floating-bound') === '1') {
+				return;
+			}
+
+			shell.setAttribute('data-nelxstd-prt-floating-bound', '1');
+			tourId = normalizeTourId(shell.getAttribute('data-nelxstd-prt-floating-tour'));
+
+			if (!config.isEditor && isFloatingDismissed(tourId)) {
+				shell.remove();
+				return;
+			}
+
+			button = shell.querySelector('.nelxstd-prt-floating-replay-button');
+			closeButton = shell.querySelector('.nelxstd-prt-floating-replay-close');
+
+			if (button) {
+				button.addEventListener('click', function () {
+					var group = tourGroups.find(function (item) {
+						return item.id === tourId;
+					}) || getFirstTour();
+
+					startTour(group);
+				});
+			}
+
+			if (closeButton) {
+				closeButton.addEventListener('click', function (event) {
+					event.preventDefault();
+					event.stopPropagation();
+					dismissFloatingReplay(shell, tourId);
+				});
+			}
+		});
+	}
+
 	function text(key) {
 		return (config.i18n && config.i18n[key]) || key;
 	}
 
-	window.addEventListener('resize', repositionActiveOutsideNavigation, { passive: true });
-	window.addEventListener('scroll', repositionActiveOutsideNavigation, { passive: true, capture: true });
 
 	function init() {
 		if (!config.isLoggedIn && !config.isEditor) {
@@ -1358,8 +1162,8 @@
 		}
 
 		collectTours();
-		createLauncher();
 		bindLaunchers();
+		bindFloatingReplayButtons();
 		if (config.isEditor) {
 			bindEditorPreview();
 			syncEditorPreview();
@@ -1378,13 +1182,12 @@
 		window.elementorFrontend.hooks.addAction('frontend/element_ready/global', function () {
 			window.setTimeout(function () {
 				collectTours();
-				createLauncher();
 				bindLaunchers();
+				bindFloatingReplayButtons();
 				if (config.isEditor) {
 					bindEditorPreview();
 					syncEditorPreview();
 				}
-				updateLauncher();
 			}, 150);
 		});
 	}

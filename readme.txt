@@ -4,7 +4,7 @@ Tags: elementor, onboarding, product tour, guided tour, dashboard
 Requires at least: 6.2
 Tested up to: 6.9
 Requires PHP: 7.4
-Stable tag: 1.0.6
+Stable tag: 1.0.17
 License: GPLv2 or later
 License URI: https://www.gnu.org/licenses/gpl-2.0.html
 
@@ -12,9 +12,9 @@ Create modern guided product tours directly inside Elementor templates and pages
 
 == Description ==
 
-Nelx Product Tour adds a "Nelx Product Tour" control section to Elementor widgets, sections, columns, and containers. Turn any element into a tour step, write a title and description, choose a target mode, and let logged-in users walk through the page.
+Nelx Product Tour adds a "Nelx Product Tour" setup section to Elementor widgets and layout elements. It appears under Content for widgets and under Layout for sections, columns, Containers, and Grid Containers so Elementor keeps its native tab order. Turn any element into a tour step, write a title and description, choose a target mode, and let logged-in users walk through the page.
 
-The plugin also registers a visible Elementor widget named "Product Tour Launcher" under the "Nelx Product Tour" category. Use it when you want a custom button inside the page instead of relying only on the floating replay button.
+The plugin also registers two visible Elementor widgets under the "Nelx Product Tour" category: "Product Tour Launcher" for an in-page launcher and "Floating Tour Replay Button" for an independently styled fixed replay button.
 
 Tours run on frontend Elementor-rendered pages only. In the Elementor editor, enabled steps are outlined, and the optional Tour Card Preview switch shows a lightweight live card for styling without starting a real tour.
 
@@ -24,9 +24,9 @@ Features:
 * CSS selector targeting for custom widget IDs and classes.
 * Ordered steps with top-to-bottom fallback sorting.
 * Next, back, skip, progress dots, overlay spotlight, auto-start, and replay button.
-* Native Elementor Style tab controls for tour card styling, typography, borders, box shadows, button hover states and transforms, target highlights, and the floating replay button with its original gradient default.
+* Native Elementor Style tab controls for tour card styling, typography, borders, box shadows, button hover states and transforms, and target highlights. The independent Floating Tour Replay Button includes its original gradient default, typography, borders, box shadows, hover styling, hover lift, close-button styling, close-button padding, and X/Y positioning controls.
 * Desktop-safe tour card layout that prevents theme/global CSS from collapsing the popover content into a narrow column. Back/Next navigation defaults inside the card on desktop, with an optional outside-card position; mobile always keeps navigation inside.
-* Dismissible floating replay button with a per-page dismissal state; use the Product Tour Launcher widget to replay after dismissal. The Product Tour Launcher widget includes typography, borders, shadows, hover styling, and hover-lift controls.
+* Dismissible Floating Tour Replay Button widget with a per-page dismissal state; use the Product Tour Launcher widget to replay after dismissal. The floating widget is fixed at the viewport level so it does not participate in the surrounding Elementor header or container layout.
 * Completion remembered in both user meta and browser localStorage.
 * Logged-in users only.
 * Bundled Driver.js 1.8.0 assets with no runtime CDN dependency.
@@ -38,9 +38,9 @@ Features:
 2. Activate Nelx Product Tour.
 3. Edit an Elementor page or template.
 4. Open a widget, section, column, or container.
-5. Go to Advanced > Nelx Product Tour.
+5. Open Content for a widget, or Layout for a section, column, Container, or Grid Container, then select Nelx Product Tour.
 6. Enable Tour Step and fill in the step content.
-7. Optional: add the Product Tour Launcher widget from the Nelx Product Tour category.
+7. Optional: add the Product Tour Launcher widget or Floating Tour Replay Button widget from the Nelx Product Tour category.
 
 == Frequently Asked Questions ==
 
@@ -65,6 +65,24 @@ Yes. Set Target Mode to Custom CSS Selector and enter a class or ID such as `.da
 The visible widget is called "Product Tour Launcher". It starts or replays a tour by Tour ID.
 
 == Changelog ==
+
+= 1.0.17 =
+* Made desktop Inside Card navigation use the exact same native Driver.js flex-footer blueprint as mobile.
+* Kept the step indicator and Back/Next/Done controls as normal-flow footer siblings, with no desktop coordinates or breakpoint logic.
+* Kept Outside Card navigation as a separate card-relative layout below the card.
+
+= 1.0.15 =
+* Preserved Elementor's native tab order by placing Product Tour controls in Layout for layout elements and Content for widgets.
+* Replaced dynamic tour navigation positioning with card-relative CSS: inside uses the native footer; outside is always below the card.
+* Removed navigation scroll/resize listeners and animation-frame coordinate calculations.
+
+= 1.0.14 =
+* Rebuilt the Elementor control injection from the 1.0.10 baseline.
+* Moved Nelx Product Tour setup from the Advanced tab to the Content tab for widgets, sections, columns, containers, and Grid containers.
+* Added eight independent conditional Style sections: Tour Card, Title & Description, Step Indicator, Tour Buttons Position, Tour Skip Button, Tour Back Button, Tour Next/Done Button, and Target Highlight.
+* Kept Show Tour Card Preview inside the Tour Card section.
+* Registered Content and Style sections once per Elementor element using the documented before-section injection hook and an object-level duplicate guard.
+* Scoped native typography, border, and box-shadow group-control selectors to an intentionally absent child so generated Elementor CSS cannot affect the host element or header.
 
 = 1.0.6 =
 * Made desktop Inside Card navigation use the same footer structure and explicit static positioning as mobile on the real frontend tour card.

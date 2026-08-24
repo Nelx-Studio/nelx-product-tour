@@ -181,18 +181,11 @@
 }
 
 /*
- * Driver.js resets the popover with `all: unset`. Force the tour card back into
- * an explicit block/flex layout so theme or Elementor global styles cannot make
- * the title, description, and footer collapse into a narrow desktop column.
+ * Driver.js owns the popover structure and positioning. This rule only applies
+ * Nelx's visual card settings; the native Driver.js layout remains intact.
  */
 .nelxstd-prt-driver-popover {
-	all: unset;
 	box-sizing: border-box !important;
-	display: flex !important;
-	flex-direction: column !important;
-	align-items: stretch !important;
-	justify-content: flex-start !important;
-	position: fixed;
 	width: min(var(--nelxstd-prt-card-width, 360px), calc(100vw - 32px)) !important;
 	max-width: min(var(--nelxstd-prt-card-width, 360px), calc(100vw - 32px)) !important;
 	min-width: min(250px, calc(100vw - 32px)) !important;
@@ -206,7 +199,6 @@
 	color: var(--nelxstd-prt-dark);
 	box-shadow: var(--nelxstd-prt-card-shadow) !important;
 	font-family: inherit;
-	z-index: 1000000000;
 	overflow: visible !important;
 }
 
@@ -255,22 +247,9 @@
 	overflow-wrap: anywhere;
 }
 
-.nelxstd-prt-driver-popover .driver-popover-footer {
-	width: 100% !important;
-	max-width: 100% !important;
-	margin-top: 18px !important;
-	padding: 0;
-	text-align: initial;
-	display: flex !important;
-	flex-direction: row !important;
-	align-items: center !important;
-	justify-content: space-between !important;
-	gap: 12px;
-	flex-wrap: nowrap !important;
-}
+
 
 .nelxstd-prt-driver-popover .driver-popover-progress-text {
-	flex: 0 0 auto;
 	display: inline-flex !important;
 	align-items: center;
 	justify-content: center;
@@ -290,18 +269,10 @@
 	white-space: nowrap;
 }
 
-.nelxstd-prt-driver-popover .driver-popover-navigation-btns {
-	flex: 0 0 auto;
-	display: flex !important;
-	align-items: center;
-	justify-content: flex-end;
-	gap: 8px;
-	min-width: 0;
-}
+
 
 .nelxstd-prt-driver-popover .driver-popover-footer-btn {
 	box-sizing: border-box !important;
-	margin: 0 !important;
 	border-style: var(--nelxstd-prt-next-border-style, solid) !important;
 	border-color: var(--nelxstd-prt-next-border-color, transparent) !important;
 	border-width: var(--nelxstd-prt-next-border-width, 0) !important;
@@ -423,32 +394,68 @@
 	transform: translateY(var(--nelxstd-prt-skip-hover-lift, -1px));
 }
 
-/* Navigation defaults to the Driver.js footer. Runtime inline positioning is the
- * source of truth on the frontend; these rules are safe fallbacks for the editor
- * preview and for the brief period before JavaScript applies the selected mode. */
-.nelxstd-prt-driver-popover.nelxstd-prt-nav-inside .driver-popover-navigation-btns,
-.nelxstd-prt-editor-preview.nelxstd-prt-nav-inside .driver-popover-navigation-btns {
-	position: static !important;
-	top: auto !important;
-	right: auto !important;
-	bottom: auto !important;
-	left: auto !important;
-	max-width: 100% !important;
-	width: auto !important;
-	flex-wrap: nowrap !important;
+/*
+ * Driver.js footer isolation
+ * ---------------------------
+ * The real Driver.js popover uses a semantic <footer>. Site/theme CSS may
+ * apply global footer rules to it. Keep that global styling from changing
+ * Driver.js's native footer geometry while leaving Driver.js responsible
+ * for the actual navigation structure and flow.
+ */
+.nelxstd-prt-driver-popover footer.driver-popover-footer {
+	box-sizing: border-box;
+	display: flex;
+	flex-direction: row;
+	flex-wrap: nowrap;
+	align-items: center;
+	justify-content: space-between;
+	width: 100%;
+	min-width: 0;
+	max-width: none;
+	min-height: 0;
+	margin: 15px 0 0;
+	padding: 0;
+	float: none;
+	clear: none;
+	position: static;
+	inset: auto;
+	text-align: right;
 }
 
+.nelxstd-prt-driver-popover footer.driver-popover-footer > .driver-popover-progress-text {
+	flex: 0 0 auto;
+	margin: 0;
+}
+
+.nelxstd-prt-driver-popover footer.driver-popover-footer > .driver-popover-navigation-btns {
+	flex: 1 1 auto;
+	min-width: 0;
+	margin: 0 0 0 auto;
+	display: flex;
+	flex-direction: row;
+	flex-wrap: nowrap;
+	align-items: center;
+	justify-content: flex-end;
+	position: static;
+	inset: auto;
+}
+
+.nelxstd-prt-driver-popover footer.driver-popover-footer > .driver-popover-navigation-btns > .driver-popover-footer-btn + .driver-popover-footer-btn {
+	margin-left: 4px;
+}
+
+/*
+ * Outside Card is the only deliberate exception. The progress indicator
+ * remains in the footer; only the navigation group leaves the footer.
+ */
 .nelxstd-prt-driver-popover.nelxstd-prt-nav-outside .driver-popover-navigation-btns,
 .nelxstd-prt-editor-preview.nelxstd-prt-nav-outside .driver-popover-navigation-btns {
-	position: fixed !important;
-	top: 0;
-	right: auto;
-	bottom: auto;
-	left: 0;
+	position: absolute !important;
+	top: calc(100% + 8px) !important;
+	right: 0 !important;
+	bottom: auto !important;
+	left: auto !important;
 	z-index: 1000000001;
-	max-width: calc(100vw - 24px);
-	width: max-content;
-	flex-wrap: wrap;
 }
 
 .nelxstd-prt-editor-preview {
@@ -507,26 +514,134 @@
 		max-width: calc(100vw - 32px) !important;
 	}
 
-	.nelxstd-prt-driver-popover .driver-popover-footer {
-		gap: 8px;
-	}
-
-	.nelxstd-prt-driver-popover.nelxstd-prt-nav-outside .driver-popover-navigation-btns,
-	.nelxstd-prt-editor-preview.nelxstd-prt-nav-outside .driver-popover-navigation-btns {
-		position: static !important;
-		top: auto !important;
-		right: auto !important;
-		bottom: auto !important;
-		left: auto !important;
-		max-width: 100%;
-		width: auto;
-		flex-wrap: nowrap;
-	}
 
 	.nelxstd-prt-editor-preview {
 		right: 16px;
 		bottom: 72px;
 		width: calc(100vw - 32px) !important;
 		max-width: calc(100vw - 32px) !important;
+	}
+}
+
+
+/*
+ * Independent Floating Tour Replay Button.
+ *
+ * The Elementor widget wrapper itself is fixed by the widget render method.
+ * These rules only style the widget's own content and never reposition or move
+ * the parent Elementor layout/container.
+ */
+.nelxstd-prt-floating-replay-widget {
+	--nelxstd-prt-floating-widget-classic-background: #1e3a8a;
+	--nelxstd-prt-floating-widget-gradient-a: #1e3a8a;
+	--nelxstd-prt-floating-widget-gradient-b: #00b7c2;
+	--nelxstd-prt-floating-widget-gradient-angle: 135deg;
+	--nelxstd-prt-floating-widget-hover-classic-background: #1e3a8a;
+	--nelxstd-prt-floating-widget-hover-gradient-a: #1e3a8a;
+	--nelxstd-prt-floating-widget-hover-gradient-b: #00b7c2;
+	--nelxstd-prt-floating-widget-hover-gradient-angle: 135deg;
+	position: relative;
+	display: inline-flex;
+	align-items: center;
+	justify-content: center;
+	max-width: 100%;
+	overflow: visible;
+}
+
+.nelxstd-prt-floating-replay-button {
+	display: inline-flex;
+	align-items: center;
+	justify-content: center;
+	box-sizing: border-box;
+	max-width: 100%;
+	margin: 0;
+	padding: 14px 18px;
+	border: 0;
+	border-radius: 999px;
+	cursor: pointer;
+	background: linear-gradient(135deg, #1e3a8a, #00b7c2);
+	color: #ffffff;
+	font-family: inherit;
+	font-size: 14px;
+	font-weight: 800;
+	font-style: normal;
+	line-height: 1;
+	text-align: center;
+	text-decoration: none;
+	white-space: nowrap;
+	transition: transform 160ms ease, box-shadow 160ms ease, background 160ms ease, color 160ms ease, border-color 160ms ease;
+}
+
+.nelxstd-prt-floating-replay-widget[data-nelxstd-prt-floating-background-type="classic"] .nelxstd-prt-floating-replay-button {
+	background: var(--nelxstd-prt-floating-widget-classic-background);
+}
+
+.nelxstd-prt-floating-replay-widget[data-nelxstd-prt-floating-background-type="gradient"] .nelxstd-prt-floating-replay-button {
+	background: linear-gradient(
+		var(--nelxstd-prt-floating-widget-gradient-angle),
+		var(--nelxstd-prt-floating-widget-gradient-a),
+		var(--nelxstd-prt-floating-widget-gradient-b)
+	);
+}
+
+.nelxstd-prt-floating-replay-widget[data-nelxstd-prt-floating-hover-background-type="classic"] .nelxstd-prt-floating-replay-button:hover,
+.nelxstd-prt-floating-replay-widget[data-nelxstd-prt-floating-hover-background-type="classic"] .nelxstd-prt-floating-replay-button:focus-visible {
+	background: var(--nelxstd-prt-floating-widget-hover-classic-background);
+}
+
+.nelxstd-prt-floating-replay-widget[data-nelxstd-prt-floating-hover-background-type="gradient"] .nelxstd-prt-floating-replay-button:hover,
+.nelxstd-prt-floating-replay-widget[data-nelxstd-prt-floating-hover-background-type="gradient"] .nelxstd-prt-floating-replay-button:focus-visible {
+	background: linear-gradient(
+		var(--nelxstd-prt-floating-widget-hover-gradient-angle),
+		var(--nelxstd-prt-floating-widget-hover-gradient-a),
+		var(--nelxstd-prt-floating-widget-hover-gradient-b)
+	);
+}
+
+.nelxstd-prt-floating-replay-button:hover,
+.nelxstd-prt-floating-replay-button:focus-visible {
+	outline: none;
+	transform: translateY(-1px);
+}
+
+.nelxstd-prt-floating-replay-close {
+	position: absolute;
+	top: -11px;
+	right: -11px;
+	z-index: 2;
+	display: inline-flex;
+	align-items: center;
+	justify-content: center;
+	box-sizing: border-box;
+	width: 22px;
+	height: 22px;
+	margin: 0;
+	padding: 4px;
+	border: 0;
+	border-radius: 50%;
+	cursor: pointer;
+	background: #ffffff;
+	color: #1e3a8a;
+	font-family: Arial, sans-serif;
+	font-size: 16px;
+	font-weight: 700;
+	line-height: 1;
+	text-align: center;
+	transition: transform 160ms ease, box-shadow 160ms ease, background 160ms ease, color 160ms ease, border-color 160ms ease;
+}
+
+.nelxstd-prt-floating-replay-close:focus-visible {
+	outline: none;
+}
+
+@media (max-width: 480px) {
+	.nelxstd-prt-floating-replay-widget {
+		max-width: calc(100vw - 24px);
+	}
+
+	.nelxstd-prt-floating-replay-button {
+		max-width: calc(100vw - 24px);
+		overflow: hidden;
+		text-overflow: ellipsis;
 	}
 }

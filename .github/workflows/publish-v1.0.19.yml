@@ -1,0 +1,59 @@
+name: Publish Nelx Product Tour v1.0.19
+on:
+  push:
+    branches:
+      - main
+    paths:
+      - .github/workflows/publish-v1.0.19.yml
+
+permissions:
+  contents: write
+
+jobs:
+  publish:
+    runs-on: ubuntu-latest
+    steps:
+      - name: Checkout verified v1.0.19 source
+        uses: actions/checkout@v4
+        with:
+          ref: fffc9ff735954d9d438f9bc091dbb2ea7e06dc6a
+          persist-credentials: false
+      - name: Package installable WordPress plugin
+        shell: bash
+        run: |
+          set -euo pipefail
+          mkdir -p build/nelx-product-tour
+          cp -a assets includes languages nelx-product-tour.php readme.txt uninstall.php build/nelx-product-tour/
+          (cd build && zip -q -r ../nelx-product-tour-1.0.19.zip nelx-product-tour)
+          unzip -t nelx-product-tour-1.0.19.zip
+          test "$(unzip -p nelx-product-tour-1.0.19.zip nelx-product-tour/nelx-product-tour.php | grep -c 'Version: 1.0.19')" -eq 1
+      - name: Write release notes
+        shell: bash
+        run: |
+          cat > RELEASE_NOTES.md <<'EOF'
+          ## Nelx Product Tour v1.0.19
+
+          - Prevent automatic tour restarts after Done or Skip, including Elementor pages with multiple tour groups.
+          - Preserve completed-tour state across visits, with page-level completion and previous-version compatibility.
+          - Keep the Replay Tour button fixed to the mobile viewport, including inside transformed or clipped Elementor layouts.
+          - Set the default Skip button border to 0px and retain keyboard focus styling.
+          - Preserve existing Elementor styling controls.
+
+          Installation: Download the **nelx-product-tour-1.0.19.zip** release asset and upload it in WordPress under Plugins > Add Plugin > Upload Plugin.
+          EOF
+      - name: Create tagged GitHub release and upload ZIP
+        env:
+          GH_TOKEN: ${{ github.token }}
+        shell: bash
+        run: |
+          set -euo pipefail
+          if gh release view v1.0.19 >/dev/null 2>&1; then
+            echo 'Release v1.0.19 already exists: refusing duplicate publication.'
+            exit 1
+          fi
+          gh release create v1.0.19 nelx-product-tour-1.0.19.zip \
+            --repo "${{ github.repository }}" \
+            --target fffc9ff735954d9d438f9bc091dbb2ea7e06dc6a \
+            --title "Nelx Product Tour v1.0.19" \
+            --notes-file RELEASE_NOTES.md \
+            --latest

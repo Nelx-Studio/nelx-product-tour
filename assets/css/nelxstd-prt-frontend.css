@@ -39,6 +39,8 @@
 	--nelxstd-prt-skip-font-weight: 800;
 	--nelxstd-prt-skip-padding: 11px 16px;
 	--nelxstd-prt-skip-radius: 999px;
+	--nelxstd-prt-skip-border-width: 0px;
+	--nelxstd-prt-skip-hover-border-width: 0px;
 
 	--nelxstd-prt-back-background: #f4f7fb;
 	--nelxstd-prt-back-color: #272626;
@@ -363,6 +365,9 @@
 	width: auto !important;
 	height: auto !important;
 	padding: var(--nelxstd-prt-skip-padding, 11px 16px) !important;
+	/* Never inherit a theme/Driver button border unless explicitly styled. */
+	border: 0 solid transparent !important;
+	outline: 0;
 	border-style: var(--nelxstd-prt-skip-border-style, solid) !important;
 	border-color: var(--nelxstd-prt-skip-border-color, transparent) !important;
 	border-width: var(--nelxstd-prt-skip-border-width, 0) !important;
@@ -392,6 +397,11 @@
 	border-width: var(--nelxstd-prt-skip-hover-border-width, var(--nelxstd-prt-skip-border-width, 0)) !important;
 	box-shadow: var(--nelxstd-prt-skip-hover-shadow, var(--nelxstd-prt-skip-shadow, none)) !important;
 	transform: translateY(var(--nelxstd-prt-skip-hover-lift, -1px));
+}
+
+.nelxstd-prt-driver-popover .driver-popover-close-btn:focus-visible {
+	outline: 2px solid currentColor;
+	outline-offset: 2px;
 }
 
 /*
@@ -526,11 +536,58 @@
 
 /*
  * Independent Floating Tour Replay Button.
- *
- * The Elementor widget wrapper itself is fixed by the widget render method.
- * These rules only style the widget's own content and never reposition or move
- * the parent Elementor layout/container.
+ * The viewport wrapper is moved to a body-level portal on the frontend to
+ * avoid transformed and clipped Elementor parents while preserving Style CSS.
  */
+.nelxstd-prt-floating-portal {
+	position: fixed !important;
+	top: auto !important;
+	right: 22px !important;
+	bottom: 22px !important;
+	left: auto !important;
+	z-index: 999980 !important;
+	display: block !important;
+	width: max-content !important;
+	max-width: calc(100vw - 44px) !important;
+	height: auto !important;
+	overflow: visible !important;
+	transform: none !important;
+}
+
+/* CSS-only fallback when JS relocation cannot run. */
+.nelxstd-prt-floating-replay-viewport {
+	position: fixed !important;
+	top: auto !important;
+	right: 22px !important;
+	bottom: 22px !important;
+	left: auto !important;
+	z-index: 999980 !important;
+	display: inline-flex !important;
+	width: max-content !important;
+	max-width: calc(100vw - 44px) !important;
+	height: max-content !important;
+	overflow: visible !important;
+	transform: none !important;
+}
+
+/* The parent portal now provides the fixed position. */
+.nelxstd-prt-floating-portal .nelxstd-prt-floating-replay-viewport {
+	position: relative !important;
+	top: auto !important;
+	right: auto !important;
+	bottom: auto !important;
+	left: auto !important;
+	max-width: 100% !important;
+}
+
+@media (max-width: 600px) {
+	.nelxstd-prt-floating-portal,
+	.nelxstd-prt-floating-replay-viewport {
+		right: max(16px, env(safe-area-inset-right)) !important;
+		bottom: max(16px, env(safe-area-inset-bottom)) !important;
+		max-width: calc(100vw - 32px) !important;
+	}
+}
 .nelxstd-prt-floating-replay-widget {
 	--nelxstd-prt-floating-widget-classic-background: #1e3a8a;
 	--nelxstd-prt-floating-widget-gradient-a: #1e3a8a;

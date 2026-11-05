@@ -4,7 +4,7 @@ Tags: elementor, onboarding, product tour, guided tour, dashboard
 Requires at least: 6.2
 Tested up to: 6.9
 Requires PHP: 7.4
-Stable tag: 1.0.17
+Stable tag: 1.0.19
 License: GPLv2 or later
 License URI: https://www.gnu.org/licenses/gpl-2.0.html
 
@@ -65,6 +65,18 @@ Yes. Set Target Mode to Custom CSS Selector and enter a class or ID such as `.da
 The visible widget is called "Product Tour Launcher". It starts or replays a tour by Tour ID.
 
 == Changelog ==
+
+= 1.0.19 =
+* Added a page-level completion marker. Done/Skip prevents automatic relaunch even if Elementor changes which tour group is first on the page.
+* Retained completion records from earlier versions; page-level marker is stored locally and in WordPress user metadata.
+* Moved floating replay viewport positioning to a body-level fixed portal with direct positioning safeguards and Elementor Style-tab selector preservation.
+* Added binding support for dynamically inserted replay widgets and mobile viewport resizing.
+
+
+= 1.0.18 =
+* Prevented automatic tours from restarting after Done or Skip, including pages with multiple tour IDs; replay remains available on demand.
+* Set the Skip button border to 0px by default while preserving explicitly configured borders and a keyboard focus indicator.
+* Fixed floating replay positioning on mobile, including transformed or clipped Elementor containers and device safe-area insets.
 
 = 1.0.17 =
 * Made desktop Inside Card navigation use the exact same native Driver.js flex-footer blueprint as mobile.

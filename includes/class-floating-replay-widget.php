@@ -3,8 +3,8 @@
  * Elementor floating tour replay button widget.
  *
  * This widget is intentionally independent from individual tour-step styling.
- * It is rendered as a fixed Elementor widget wrapper so it does not participate
- * in header/container layout flow.
+ * Its Elementor wrapper is styled as a fixed viewport overlay. Frontend JS
+ * relocates that wrapper to body to avoid transformed mobile ancestors.
  *
  * @package NelxProductTour
  */
@@ -663,17 +663,9 @@ final class NELXSTD_PRT_Floating_Replay_Widget extends \Elementor\Widget_Base {
 			? sanitize_key( $settings['nelxstd_prt_floating_hover_background_type'] )
 			: 'same';
 
-		/*
-		 * Fix the widget at the viewport level using the Elementor widget wrapper
-		 * itself. This prevents the widget from participating in a header/container
-		 * flex or grid layout. No DOM reparenting or frontend layout mutation is used.
-		 */
-		$this->add_render_attribute(
-			'_wrapper',
-			array(
-				'style' => 'position:fixed!important;top:auto!important;right:22px!important;bottom:22px!important;left:auto!important;z-index:999980!important;width:max-content!important;max-width:calc(100vw - 44px)!important;height:max-content!important;display:inline-flex!important;overflow:visible!important;box-sizing:border-box!important;margin:0!important;padding:0!important;',
-			)
-		);
+		// A class (rather than inline !important offsets) allows responsive viewport
+		// positioning; the complete Elementor wrapper keeps its styling controls.
+		$this->add_render_attribute( '_wrapper', 'class', 'nelxstd-prt-floating-replay-viewport' );
 
 		?>
 		<div

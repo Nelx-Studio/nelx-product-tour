@@ -4,6 +4,8 @@
 	var config = window.NELXSTD_PRT_CONFIG || {};
 	var tourGroups = [];
 	var activeTour = null;
+	var hasStartedTour = false;
+	var replayObserver = null;
 	var editorPreview = null;
 	var editorPreviewRaf = null;
 
@@ -191,11 +193,65 @@
 	}
 
 	function getCompletionKey(tourId) {
-		return String(config.pageId || 0) + '::' + normalizeTourId(tourId);
+		// When WordPress has no queried post ID (for example, a virtual route),
+		// tour progress must still be isolated to its actual page URL.
+		var pageId = Number(config.pageId || 0);
+		return String(pageId) + '::' + (pageId ? normalizeTourId(tourId) : getPageSeenId() + '__' + normalizeTourId(tourId));
 	}
 
 	function getLocalStorageKey(tourId) {
 		return 'nelxstd_prt_completed_' + String(config.userId || 0) + '_' + getCompletionKey(tourId);
+	}
+
+	// A single dismissal/Done records that this page has shown its automatic
+	// introduction. This is independent of whichever tour ID happens to be first
+	// in the DOM (responsive layouts and dynamic Elementor templates may reorder it).
+	function getPageSeenId() {
+		var path = (window.location && window.location.pathname ? window.location.pathname : '/').replace(/\/+$/, '') || '/';
+		var encoded = encodeURIComponent(path.toLowerCase());
+		var hash = 2166136261;
+		for (var i = 0; i < encoded.length; i++) {
+			hash ^= encoded.charCodeAt(i);
+			hash = Math.imul(hash, 16777619);
+		}
+		return 'page_' + (hash >>> 0).toString(16);
+	}
+
+	function getPageSeenKey() {
+		// Page scope uses a fixed 0 prefix, so it does not change on pages
+		// rendered through theme templates or routes with varying post IDs.
+		return '0::' + getPageSeenId();
+	}
+
+	function getPageSeenLocalKey() {
+		return 'nelxstd_prt_completed_' + String(config.userId || 0) + '_' + getPageSeenKey();
+	}
+
+	function hasSeenAutomaticTour() {
+		var completed = config.completedKeys || [];
+		var pageKey = getPageSeenKey();
+		var oldPrefix = String(config.pageId || 0) + '::';
+		var browserPrefix = 'nelxstd_prt_completed_' + String(config.userId || 0) + '_' + oldPrefix;
+		if (completed.indexOf(pageKey) !== -1 || (Number(config.pageId || 0) > 0 && completed.some(function (key) {
+			// Backwards compatibility for tours completed with older releases.
+			return key.indexOf(oldPrefix) === 0;
+		}))) {
+			return true;
+		}
+		try {
+			if (window.localStorage.getItem(getPageSeenLocalKey()) === '1') {
+				return true;
+			}
+			for (var i = 0; i < window.localStorage.length; i++) {
+				var key = window.localStorage.key(i);
+				if (Number(config.pageId || 0) > 0 && key && key.indexOf(browserPrefix) === 0 && window.localStorage.getItem(key) === '1') {
+					return true;
+				}
+			}
+		} catch (error) {
+			// Browser storage can be disabled; server-side user meta remains usable.
+		}
+		return false;
 	}
 
 	function getFloatingDismissedKey(tourId) {
@@ -226,7 +282,7 @@
 			} catch (error) {}
 		}
 
-		shell.remove();
+		removeFloatingReplay(shell);
 	}
 
 	function isCompleted(tourId) {
@@ -244,33 +300,45 @@
 		}
 	}
 
-	function markComplete(tourId) {
-		var body;
-		var key = getCompletionKey(tourId);
-
+	function persistCompletionLocally(key, localKey) {
 		try {
-			window.localStorage.setItem(getLocalStorageKey(tourId), '1');
+			window.localStorage.setItem(localKey, '1');
 		} catch (error) {}
-
 		if ((config.completedKeys || []).indexOf(key) === -1) {
 			config.completedKeys = (config.completedKeys || []).concat([key]);
 		}
+	}
 
-		if (!config.isLoggedIn || !config.ajaxUrl || !config.nonce) {
+	var completionRequests = {};
+	function markComplete(tourId) {
+		var normalized = normalizeTourId(tourId);
+		var requestKey = getPageSeenKey() + '::' + normalized;
+		// Write both browser records first so immediate page reloads are safe.
+		persistCompletionLocally(getPageSeenKey(), getPageSeenLocalKey());
+		persistCompletionLocally(getCompletionKey(normalized), getLocalStorageKey(normalized));
+		if (!config.isLoggedIn || !config.ajaxUrl || !config.nonce || completionRequests[requestKey]) {
 			return;
 		}
-
-		body = new window.FormData();
+		completionRequests[requestKey] = true;
+		var body = new window.FormData();
 		body.append('action', 'nelxstd_prt_complete_tour');
 		body.append('nonce', config.nonce);
 		body.append('pageId', config.pageId || 0);
-		body.append('tourId', normalizeTourId(tourId));
-
+		body.append('tourId', Number(config.pageId || 0) > 0 ? normalized : getPageSeenId() + '__' + normalized);
+		body.append('pageSeenId', getPageSeenId());
+		// A single request writes the tour and page marker atomically to user meta.
 		window.fetch(config.ajaxUrl, {
 			method: 'POST',
 			credentials: 'same-origin',
+			keepalive: true,
 			body: body,
-		}).catch(function () {});
+		}).then(function (response) {
+			if (!response.ok) {
+				delete completionRequests[requestKey];
+			}
+		}).catch(function () {
+			delete completionRequests[requestKey];
+		});
 	}
 
 	function parseStyles(source) {
@@ -1003,15 +1071,16 @@
 
 
 	function getFirstTour() {
-		if (config.isEditor) {
-			return tourGroups[0];
-		}
+		// Launchers may deliberately replay a previously completed tour.
+		return tourGroups[0];
+	}
 
-		return (
-			tourGroups.find(function (group) {
-				return !isCompleted(group.id);
-			}) || tourGroups[0]
-		);
+	function getAutoTour() {
+		// Only the first tour on a page can start automatically. Previously,
+		// completing or skipping it caused another unfinished tour to launch
+		// when the page was reopened.
+		var first = getFirstTour();
+		return first && !hasSeenAutomaticTour() && !isCompleted(first.id) ? first : null;
 	}
 
 	function startTour(group) {
@@ -1020,6 +1089,8 @@
 		if (!group || !driverFactory) {
 			return;
 		}
+
+		hasStartedTour = true;
 
 		if (activeTour && activeTour.isActive && activeTour.isActive()) {
 			activeTour.destroy();
@@ -1045,18 +1116,35 @@
 			smoothScroll: true,
 			stagePadding: 8,
 			stageRadius: 14,
-			steps: group.steps.map(function (step) {
+			steps: group.steps.map(function (step, index) {
 				var navigationPosition = (step.styles || {}).navigation_position || 'inside';
 				var popover = {
 					title: step.title,
 					description: step.description,
 					// Inside uses Driver.js's native footer/navigation flow. Only Outside gets a custom CSS mode.
 					popoverClass: 'nelxstd-prt-driver-popover' + ('outside' === navigationPosition ? ' nelxstd-prt-nav-outside' : ''),
+					// Persist Skip before removing the tour, not only in onDestroyed.
+					onCloseClick: function () {
+						if (!config.isEditor) {
+							markComplete(group.id);
+						}
+						activeTour.destroy();
+					},
 					onPopoverRender: function (renderedPopover) {
 						applyTourStyles(step.styles || {});
 						decoratePopover(renderedPopover);
 					},
 				};
+
+				if (index === group.steps.length - 1) {
+					// Done is the Next action on the last step. Persist immediately.
+					popover.onNextClick = function () {
+						if (!config.isEditor) {
+							markComplete(group.id);
+						}
+						activeTour.destroy();
+					};
+				}
 
 				if (step.placement && step.placement !== 'auto') {
 					popover.side = step.placement;
@@ -1110,6 +1198,74 @@
 		});
 	}
 
+	function setImportant(node, property, value) {
+		node.style.setProperty(property, value, 'important');
+	}
+
+	function pinFloatingReplayToViewport(shell) {
+		if (config.isEditor || !shell) {
+			return;
+		}
+		// Elementor's _wrapper render attribute can be missing in some
+		// templates. Find the actual widget wrapper rather than a CSS class only.
+		var wrapper = shell.closest('.nelxstd-prt-floating-replay-viewport') ||
+			shell.closest('.elementor-widget-nelxstd_prt_floating_replay') || shell.closest('.elementor-widget');
+		if (!wrapper) {
+			return;
+		}
+		wrapper.classList.add('nelxstd-prt-floating-replay-viewport');
+		var portal = wrapper.parentNode;
+		if (!portal || !portal.classList || !portal.classList.contains('nelxstd-prt-floating-portal')) {
+			// Keep Elementor document classes in the portal so generated Style-tab
+			// selectors continue to match after the widget leaves its container.
+			var scope = wrapper.closest('.elementor');
+			portal = document.createElement('div');
+			portal.className = 'nelxstd-prt-floating-portal' + (scope ? ' ' + scope.className : '');
+			document.body.appendChild(portal);
+			portal.appendChild(wrapper);
+		}
+		// The portal itself owns viewport positioning. Inline !important styles
+		// defend against Elementor/theme responsive CSS and stale generated CSS.
+		var mobile = window.matchMedia && window.matchMedia('(max-width: 600px)').matches;
+		setImportant(portal, 'position', 'fixed');
+		setImportant(portal, 'top', 'auto');
+		setImportant(portal, 'left', 'auto');
+		setImportant(portal, 'right', mobile ? 'max(16px, env(safe-area-inset-right))' : '22px');
+		setImportant(portal, 'bottom', mobile ? 'max(16px, env(safe-area-inset-bottom))' : '22px');
+		setImportant(portal, 'display', 'block');
+		setImportant(portal, 'width', 'max-content');
+		setImportant(portal, 'max-width', mobile ? 'calc(100vw - 32px)' : 'calc(100vw - 44px)');
+		setImportant(portal, 'height', 'auto');
+		setImportant(portal, 'z-index', '999980');
+		setImportant(portal, 'overflow', 'visible');
+		setImportant(portal, 'visibility', 'visible');
+		setImportant(portal, 'transform', 'none');
+		setImportant(wrapper, 'position', 'relative');
+		setImportant(wrapper, 'top', 'auto');
+		setImportant(wrapper, 'right', 'auto');
+		setImportant(wrapper, 'bottom', 'auto');
+		setImportant(wrapper, 'left', 'auto');
+		setImportant(wrapper, 'width', 'max-content');
+		setImportant(wrapper, 'max-width', '100%');
+		setImportant(wrapper, 'display', 'inline-flex');
+		setImportant(wrapper, 'margin', '0');
+		setImportant(wrapper, 'padding', '0');
+		setImportant(wrapper, 'transform', 'none');
+	}
+
+	function removeFloatingReplay(shell) {
+		var wrapper = shell.closest('.nelxstd-prt-floating-replay-viewport') || shell.closest('.elementor-widget');
+		if (wrapper) {
+			var portal = wrapper.parentNode;
+			wrapper.remove();
+			if (portal && portal.classList && portal.classList.contains('nelxstd-prt-floating-portal') && !portal.children.length) {
+				portal.remove();
+			}
+		} else {
+			shell.remove();
+		}
+	}
+
 	function bindFloatingReplayButtons() {
 		document.querySelectorAll('[data-nelxstd-prt-floating-tour]').forEach(function (shell) {
 			var tourId;
@@ -1121,10 +1277,11 @@
 			}
 
 			shell.setAttribute('data-nelxstd-prt-floating-bound', '1');
+			pinFloatingReplayToViewport(shell);
 			tourId = normalizeTourId(shell.getAttribute('data-nelxstd-prt-floating-tour'));
 
 			if (!config.isEditor && isFloatingDismissed(tourId)) {
-				shell.remove();
+				removeFloatingReplay(shell);
 				return;
 			}
 
@@ -1151,6 +1308,27 @@
 		});
 	}
 
+	function observeLateReplayWidgets() {
+		if (replayObserver || !window.MutationObserver || !document.body) {
+			return;
+		}
+		replayObserver = new window.MutationObserver(function (mutations) {
+			var found = mutations.some(function (mutation) {
+				return Array.prototype.some.call(mutation.addedNodes, function (node) {
+					return node.nodeType === 1 && (node.hasAttribute('data-nelxstd-prt-floating-tour') ||
+						(node.querySelector && node.querySelector('[data-nelxstd-prt-floating-tour]')));
+				});
+			});
+			if (found) {
+				bindFloatingReplayButtons();
+			}
+		});
+		replayObserver.observe(document.body, { childList: true, subtree: true });
+		window.addEventListener('resize', function () {
+			document.querySelectorAll('[data-nelxstd-prt-floating-tour]').forEach(pinFloatingReplayToViewport);
+		});
+	}
+
 	function text(key) {
 		return (config.i18n && config.i18n[key]) || key;
 	}
@@ -1164,14 +1342,18 @@
 		collectTours();
 		bindLaunchers();
 		bindFloatingReplayButtons();
+		observeLateReplayWidgets();
 		if (config.isEditor) {
 			bindEditorPreview();
 			syncEditorPreview();
 		}
 
-		if (!config.isEditor && tourGroups.length && getFirstTour() && !isCompleted(getFirstTour().id)) {
+		if (!config.isEditor && getAutoTour()) {
 			window.setTimeout(function () {
-				startTour(getFirstTour());
+				// Recheck persisted state and manual replay after the delay.
+				if (!hasStartedTour && getAutoTour()) {
+					startTour(getAutoTour());
+				}
 			}, 800);
 		}
 	}

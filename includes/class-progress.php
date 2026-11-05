@@ -84,6 +84,15 @@ final class NELXSTD_PRT_Progress {
 		}
 
 		$completed[ $key ] = current_time( 'mysql', true );
+
+		// The auto-launch marker belongs to the current page path, not to an
+		// individual Elementor tour group. Whitelist its hashed identifier to
+		// avoid accepting arbitrary usermeta keys from the request.
+		$page_seen_id = isset( $_POST['pageSeenId'] ) ? sanitize_key( wp_unslash( $_POST['pageSeenId'] ) ) : '';
+		if ( preg_match( '/^page_[0-9a-f]{1,8}$/', $page_seen_id ) ) {
+			$completed[ self::build_completion_key( 0, $page_seen_id ) ] = $completed[ $key ];
+		}
+
 		update_user_meta( get_current_user_id(), self::META_KEY, $completed );
 
 		wp_send_json_success(
